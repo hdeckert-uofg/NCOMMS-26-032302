@@ -1,0 +1,2134 @@
+/**
+ * Re-write of program for MM2
+ * Version 6 adds metadata in
+ */
+
+//These are hourly fluence rates (in uE), for a 24 hour cycle. These are currently hardcoded for 1 per hour
+//Max for white is 50uE
+int[]redint = new int [] {100,100,100,100,100,100,100,100,100,100,100,100,0,0,0,0,0,0,0,0,0,0,0,0};
+int[] greenint = new int [] {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+int[] blueint = new int [] {95,95,95,95,95,95,95,95,95,95,95,95,0,0,0,0,0,0,0,0,0,0,0,0};
+
+//Import libraries
+import ij.*;
+import ij.gui.*;
+import ij.process.*;
+import java.util.list;
+import org.micromanager.data.Coords;
+import org.micromanager.data.Image;
+import org.micromanager.data.Datastore;
+//import org.micromanager.display.DisplayWindow;
+//import mmcorej.TaggedImage;
+
+//Set parameters
+String saveLocation = "C:\\LUMOData\\";
+String [] mode = {"GFP", "LUC LD-LL", "LUC LL"};
+String [] expt = {"GFP quick image", "GFP LD-LL", "GFP LL", "GFP LL sub 30 pulse"};
+String [] colour = {"Off", "Red", "Blue", "Red+Blue"};
+String [] flip = {"No", "Yes"};
+String [] units = {"min", "secs"};
+String [] channels = {"400nm","460nm", "Luciferase","Autofluo"};
+Color[] colors = {Color.GREEN ,Color.RED, Color.WHITE};
+
+//Start dialogue inputs
+ga = new ij.gui.GenericDialog("LUMO Imaging System");
+ga.addStringField("LUMOB-", "000", 0);
+ga.addChoice("Expt type : ", mode, mode[0]);
+ga.showDialog();
+if (ga.wasCanceled())
+	return;
+userLUMO = ga.getNextString();
+String userFile = "LUMOB-" + userLUMO; 
+String file2 = "-CaF"; 
+userMode = ga.getNextChoice();
+
+if (userMode == "GFP"){
+
+gc = new ij.gui.GenericDialog("LUMO Imaging System");
+gc.addChoice("Expt type : ", expt, expt[1]);
+gc.addCheckbox("Pause after growth lights off? ",false);
+gc.addCheckbox("Luciferase imaging?",false);
+gc.addNumericField("Exposure time (s) : ", 2, 0);
+gc.addNumericField("Postpone imaging by (min) ", 0 ,0);
+gc.showDialog();
+if (gc.wasCanceled())
+	return;
+userExpt = gc.getNextChoice();
+global.userPause = gc.getNextBoolean();//Read check box
+global.userLUC = gc.getNextBoolean();//Read check box
+global.userExp = gc.getNextNumber();
+global.delayMin= gc.getNextNumber();
+userExpMs = userExp * 1000;
+delay = delayMin * 1000 * 60;
+if (userLUC == false){
+	global.nrChannels = 3;}
+if (userLUC == true){
+	global.nrChannels = 4;
+	}
+
+if (userPause == true){
+	gz = new ij.gui.GenericDialog("LUMO Imaging System");
+	gz.addNumericField("Delay time (s) : ", 60, 0);
+	gz.showDialog();
+	if (gz.wasCanceled())
+	return;
+	userDelay = gz.getNextNumber();
+	global.userDelayMs = userDelay * 1000;
+	global.flexDelay = 600000 - userDelayMs;
+	}
+
+//Quick imaging
+if (userExpt == "GFP quick image"){
+
+//Turn off overhead lights
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+mmc.sleep(2000); //wait before entering loop
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+mm.scripter().clearMessageWindow();
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+
+//Sort out metadata
+sb = store.getSummaryMetadata().copyBuilder();
+axisOrder = new ArrayList();
+axisOrder.add(Coords.C);
+axisOrder.add(Coords.T);
+sb.axisOrder(axisOrder);
+channelNames = new ArrayList();
+channelNames.add("460nm");
+channelNames.add("400nm");
+channelNames.add("Autofluo");
+if (userLUC == true){channelNames.add("Luciferase");}
+sb.channelNames(channelNames);
+coordsB = store.getSummaryMetadata().getIntendedDimensions().copyBuilder();
+coordsB.c(nrChannels).t(1);//put in number of frames here, channels can be changed too
+sb.intendedDimensions(coordsB.build());
+store.setSummaryMetadata(sb.build());
+mm.displays().createDisplay(store);
+
+public void refreshGUI();
+
+if (delayMin > 0){
+	mm.scripter().message("Imaging delayed by "+delayMin+" min");
+}
+mmc.sleep(delay);
+
+//Taking 460nm image
+mmc.setExposure(userExpMs);
+mmc.setProperty("FW", "State", "0");//Moves to 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+mm.scripter().message("Exposure in progress");
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+mmc.sleep(1000); //Pause after turning lights on (currently 1 sec)
+
+//Image capture
+image = mm.live().snap(false).get(0);
+Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+builder = builder.time(0).channel(0);
+image = image.copyAtCoords(builder.build());
+store.putImage(image);
+mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+mm.scripter().message("460nm image acquired");
+
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+image = mm.live().snap(false).get(0);
+builder = builder.channel(1);
+image = image.copyAtCoords(builder.build());
+store.putImage(image);
+mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+mm.scripter().message("400nm image acquired");
+
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+mmc.setProperty("FW", "State", "3");//Moves to 460nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.sleep(1000); //Pause (currently 1sec)
+image = mm.live().snap(false).get(0);
+builder = builder.channel(2);
+image = image.copyAtCoords(builder.build());
+store.putImage(image);
+mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+mm.scripter().message("Autofluorescence image (400nm ex/460nm em) acquired");
+
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on high pixel reduction
+	mmc.setProperty("FW", "State", "4");
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(300000);//Set exposure for luciferase (5 min)
+	mm.scripter().message("Dark before luciferase imaging");
+	mmc.sleep(30000); //Pause before luciferase exposure (currently 30 s)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	builder = builder.channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mmc.sleep(1000); //Pause after exposures (currently 1 sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+
+//Hardware reset
+mmc.sleep(5000);
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn all lights off, redundant but safe
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0");
+mm.scripter().message("LEDs off after imaging");
+mmc.setProperty("FW", "State", "0");//Move filter into 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.setExposure(20); // Resets camera exposure (in ms)
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+public void refreshGUI();
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+saveLocation += file2;
+store.freeze();
+mm.scripter().message("Images saved");
+return;}//End of Quick image
+
+//LD-LL
+if (userExpt == "GFP LD-LL"){
+//Set parameters for LD-LL
+gg = new ij.gui.GenericDialog("GFP LD-LL");
+gg.addNumericField("Daylight Red LED intensity : ", 0, 0);
+gg.addNumericField("Daylight Blue LED intensity : ", 0, 0);
+gg.addNumericField("Imaging interval during days (h): ", 1, 0);
+gg.addNumericField("Number of images (Day) : ", 12, 0);
+gg.addNumericField("Night Red LED intensity : ", 0, 0);
+gg.addNumericField("Night Blue LED intensity : ", 0, 0);
+gg.addNumericField("Imaging interval at night (h): ", 1, 0);
+gg.addNumericField("Number of images (Night) : ", 12, 0);
+gg.addNumericField("Number of days in LD cycles: ", 1, 0);
+gg.addNumericField("Number of hours in constant light: ", 120, 0);
+gg.addNumericField("Constant conditions Red LED intensity : ", 0, 0);
+gg.addNumericField("Constant conditions Blue LED intensity : ", 0, 0);
+gg.addNumericField("Closest previous ZT (h): ", 0, 0);
+gg.addNumericField("Pause before first imaging loop (min): ", 0, 0);
+//gg.addChoice("Flipper active? ", flip, flip[0]);//flipper inactive
+gg.showDialog();
+if (gg.wasCanceled())
+	return;
+global.userTrial = userLUMO;
+global.RedVoltsA = gg.getNextNumber();
+global.BlueVoltsA = gg.getNextNumber();
+global.userTimeA = gg.getNextNumber(); //Time with ColourA on
+global.nrFramesA = gg.getNextNumber(); 
+global.RedVoltsB = gg.getNextNumber();
+global.BlueVoltsB = gg.getNextNumber();
+global.userTimeB = gg.getNextNumber(); //Time with ColourB on
+global.nrFramesB = gg.getNextNumber(); 
+global.repeatLoop = gg.getNextNumber();
+global.repeatLoop = repeatLoop - 1;
+global.nrFramesC = gg.getNextNumber();//Number of images in constant light
+global.RedVoltsC = gg.getNextNumber();
+global.BlueVoltsC = gg.getNextNumber();
+//userFlipper = gg.getNextChoice();
+global.userZt = gg.getNextNumber();
+global.pauseA = gg.getNextNumber();
+
+//If numbers are too high, cancel
+if (RedVoltsA > 100){
+gui.showMessage("Red lights are set too high in day- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsA > 100){
+gui.showMessage("Blue lights are set too high in day- please change");//Logic gate for exposure
+return;}
+
+//If numbers are too high, cancel
+if (RedVoltsB > 100){
+gui.showMessage("Red lights are set too high at night- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsB > 100){
+gui.showMessage("Blue lights are set too high at night- please change");//Logic gate for exposure
+return;}
+
+//If numbers are too high, cancel
+if (RedVoltsC > 100){
+gui.showMessage("Red lights are set too high at night- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsC > 100){
+gui.showMessage("Blue lights are set too high at night- please change");//Logic gate for exposure
+return;}
+
+//Record lights used
+usedColourA = new String("\n" + "Red: "+ RedVoltsA + "\n" + "Blue: " + BlueVoltsA );
+usedColourB = new String("\n" + "Red: "+ RedVoltsB + "\n" + "Blue: " + BlueVoltsB );
+usedColourC = new String("\n" + "Red: "+ RedVoltsC + "\n" + "Blue: " + BlueVoltsC );
+
+//Record Expt ID
+usedLUMO = new String("LUMOB-" + userTrial);
+
+//convert to integers
+global.nrFramesAi = nrFramesA;
+global.nrFramesBi = nrFramesB;
+global.nrFramesCi = (nrFramesC / userTimeA);
+global.repeatLoopi = repeatLoop;
+global.pauseAi = pauseA;
+global.pauseAims = pauseAi * 60000;
+
+global.dayCal = nrFramesAi * userTimeA;
+global.nightCal = nrFramesBi * userTimeB;
+global.loopCal = repeatLoop + 1;
+String dayCalu = new String ();
+String nightCalu = new String ();
+String loopCalu = new String ();
+String pauseCalu = new String ();
+dayCalu += dayCal;
+nightCalu += nightCal;
+loopCalu += loopCal;
+pauseCal = (int) pauseA;
+pauseCalu += pauseCal;
+
+//Confirmation text
+gh = new ij.gui.GenericDialog("LD-LL Cycles");
+gh.addStringField("Day length (Hrs, Confirmation only): ", dayCalu, 4);
+gh.addStringField("Night length (Hrs, Confirmation only): ", nightCalu, 4);
+gh.addStringField("# of days (Confirmation only): ", loopCalu, 4);
+gh.addStringField("First imaging loop in (Mins, Confirmation only): ", pauseCalu, 4);
+gh.showDialog();
+if (gh.wasCanceled())
+	return;
+
+//Time conversion
+global.TimeA = userTimeA * 3600000;
+global.TimeB= userTimeB * 3600000;
+if (userPause == true){
+	if (userLUC == true){
+global.TimeAm = TimeA  - 454000 - 7000 - 3 * userExpMs;//7.5min + roGFP image capture (3s wait time + 3 images)- no zeros off here
+global.TimeBm = TimeB  - 454000 - 7000 - 3 * userExpMs;//7.5min + roGFP image capture (3s wait time + 3 images)- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 3000 - 3 * userExpMs - userDelayMs;//roGFP image capture (3s wait time + 3 images)- no zeros off here
+global.TimeBm = TimeB - 3000 - 3 * userExpMs - userDelayMs;//roGFP image capture (3s wait time + 3 images)
+}
+}
+if (userPause == false){
+	if (userLUC == true){
+global.TimeAm = TimeA  - 454000 - 7000 - 3 * userExpMs;//7.5min + roGFP image capture (3s wait time + 3 images)- no zeros off here
+global.TimeBm = TimeB  - 454000 - 7000- 3 * userExpMs;//7.5min + roGFP image capture (3s wait time + 3 images)- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 7000 - 3 * userExpMs;//roGFP image capture (3s wait time + 3 images)- no zeros off here
+global.TimeBm = TimeB - 7000 - 3 * userExpMs;//+ roGFP image capture (3s wait time + 3 images)
+}
+}
+
+//First Day
+global.firstDiel = nrFramesAi - (userZt / userTimeA);
+if (pauseCal == 0){
+	global.firstDiel = (int) firstDiel;}
+else {global.firstDiel = firstDiel - 1;}
+	global.firstNight = nrFramesBi;
+	global.firstDay = firstDiel + firstNight;
+	print("First diurnal: " + firstDiel + " images");
+	print("First night: " + firstNight + " images");
+	print("First day: " + firstDay + " images");
+
+logicDiel = dayCal - userZt;//Logic gate for day length
+if (logicDiel <= 1){
+	mm.scripter().message("Cannot start after ZT11");
+	return;}
+
+//Flipper picker- LD-LL loop- INACTIVE
+//if (userFlipper == "Yes"){
+//flipper = 1895;
+	//usedFlipper = new String("active");}
+//if (userFlipper == "No") {
+	//flipper = 1100;
+	//usedFlipper = new String("off");}
+
+//Starting timestamp
+public void refreshGUI();
+mm.scripter().clearMessageWindow();
+String startText = new String("Expt started at: ");
+Calendar cal = Calendar.getInstance();
+startText += cal.getTime();
+print(startText);
+
+//Start imaging
+
+//Redefine parameters
+global.nrFrames = ((firstDay + ((nrFramesAi + nrFramesBi) * repeatLoopi)) + nrFramesCi); //Number of images
+global.globalCount = firstDay;
+global.colourAloop = nrFramesAi + globalCount;
+global.colourBloop = colourAloop + nrFramesBi;
+
+//Colour picker (LD-LL)
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set LEDs to off
+mmc.sleep(200);
+
+public void refreshGUI();
+repeatLoopText = repeatLoop + 1;
+String diffText = new String("Configuration complete: Lights set to " + usedColourA + " for " + (int) userTimeA + " hrs x " + nrFramesAi + " then " + usedColourB + " for " + (int) userTimeB + " hrs x " + nrFramesBi + " for " + (int) repeatLoopText + " days, then " + (int) nrFramesC + " hours in " + usedColourC + "\n" + "Expt type : LUC" + "\n"); //Config confirmation
+print(diffText);
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+nrFramesZ = (int) nrFrames;
+
+//Sort out metadata
+sb = store.getSummaryMetadata().copyBuilder();
+axisOrder = new ArrayList();
+axisOrder.add(Coords.C);
+axisOrder.add(Coords.T);
+sb.axisOrder(axisOrder);
+channelNames = new ArrayList();
+channelNames.add("460nm");
+channelNames.add("400nm");
+channelNames.add("Autofluo");
+if (userLUC == true){channelNames.add("Luciferase");}
+sb.channelNames(channelNames);
+coordsB = store.getSummaryMetadata().getIntendedDimensions().copyBuilder();
+coordsB.c(nrChannels).t(nrFramesZ);//put in number of frames here, channels can be changed too
+sb.intendedDimensions(coordsB.build());
+store.setSummaryMetadata(sb.build());
+mm.displays().createDisplay(store);
+
+//Set LEDs to daytime (A)
+//Image acquisition loop
+mm.scripter().message("Waiting to begin program");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsA); 
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsA); 
+mmc.sleep(5000); //wait before entering loop (5s)
+mm.scripter().message(usedColourA + " LEDs on");
+mm.scripter().message("Pausing for " + pauseAi + " mins before entering imaging loop");
+mmc.sleep(pauseAims);
+
+//First day imaging
+	for (k=0; k < firstDiel; k++) {
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = k+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime);
+      mmc.setProperty("LUMO", "Gain", "2");//High sensitivity mode
+      mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off reduce high pixels
+      mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+      mmc.setExposure(userExpMs);
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsA); 
+	  mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsA); 
+		mm.scripter().message(usedColourA + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+		if(userPause == true){
+			mm.scripter().message("Pausing before imaging");
+			mmc.sleep(userDelayMs);
+			}
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(k).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(k).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("400nm image acquired");
+
+      mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+      mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+      image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(k).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("Autofluorescence image acquired");
+    
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("FW", "State", "4");//Moves to 560nm
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(420000);//Set exposure for luciferase (7 min)
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on reduce hgh pixels
+			if(userPause == false){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(30000);
+			}
+			if(userPause == true){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(flexDelay);
+			}
+	mm.scripter().message("Dark before luciferase imaging");
+	mmc.sleep(2000); //Pause before luciferase exposure (currently 2 sec)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(k).channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mm.scripter().message("Image " + x + " complete");
+	mmc.sleep(2000); //Pause after exposures (currently 2 sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+
+		global.l = k + 1;
+   		}
+	for (l=l; l < firstDay; l++) {
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = l+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime);
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+		mmc.setExposure(userExpMs);
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsB); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsB); 
+		mm.scripter().message(usedColourB + " LEDs on for " + userTimeB + " hrs");
+		mmc.sleep(TimeBm);
+		//Acquisition loop
+	    //Turn off LEDs
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);/ /Moves flipper down
+		if(userPause == true){
+			mm.scripter().message("Pausing before imaging");
+			mmc.sleep(userDelayMs);
+			}
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(l).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(l).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("400nm image acquired");
+
+      mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+      mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+      image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(l).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("FW", "State", "4");//Moves to 560nm
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(420000);//Set exposure for luciferase (7 min)
+	mm.scripter().message("Dark before luciferase imaging");
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on reduce hgh pixels
+			if(userPause == false){
+			mm.scripter().message("Pausing before luciferase imaging");
+			mmc.sleep(30000);
+			}
+			if(userPause == true){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(flexDelay);
+			}
+	mm.scripter().message("Luciferase imaging in progress");	mm.scripter().message("Dark before luciferase imaging");
+	mmc.sleep(2000); //Pause before luciferase exposure (currently 2 sec)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(l).channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mm.scripter().message("Image " + x + " complete");
+	mmc.sleep(2000); //Pause after exposures (currently 2sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+   		}
+//Entering into Diurnal loop
+	for (countLoop=0; countLoop < repeatLoopi; countLoop++) {
+
+	for (i=globalCount; i < colourAloop; i++) {
+		i = (int) i;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = i+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime + " - Daytime");
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+      	mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsA); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsA);
+		mm.scripter().message(usedColourA + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Turn off growth LEDs
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+		if(userPause == true){
+			mm.scripter().message("Pausing before imaging");
+			mmc.sleep(userDelayMs);
+			}
+        mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(i).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(i).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("400nm image acquired");
+
+      mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+      mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+      image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(i).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("FW", "State", "4");//Moves to 560nm
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(420000);//Set exposure for luciferase (7 min)
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on reduce hgh pixels
+			if(userPause == false){
+			mm.scripter().message("Pausing before luciferase imaging");
+			mmc.sleep(30000);
+			}
+			if(userPause == true){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(flexDelay);
+			}
+
+	mmc.sleep(2000); //Pause before luciferase exposure (currently 2 sec)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(i).channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mm.scripter().message("Image " + x + " complete");
+	mmc.sleep(2000); //Pause after exposures (currently 2sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+	global.j = i + 1;
+	if (j ==colourAloop){ 
+		global.colourBloop = colourAloop + nrFramesBi;}
+		//Acquisition loop ends
+   		}
+	for (j=j; j < colourBloop; j++) {
+		j = (int) j;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = j+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime);
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+		mmc.setExposure(userExpMs);
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+    	mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsB); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsB); 
+		mm.scripter().message(usedColourB + " LEDs on for " + userTimeB + " hrs");
+		mmc.sleep(TimeBm);
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");;
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+		if(userPause == true){
+			mm.scripter().message("Pausing before imaging");
+			mmc.sleep(userDelayMs);
+			}
+
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(j).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(j).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(j).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("FW", "State", "4");//Moves to 560nm
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(420000);//Set exposure for luciferase (7 min)
+	mm.scripter().message("Dark before luciferase imaging");
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on reduce hgh pixels
+			if(userPause == false){
+			mm.scripter().message("Pausing before luciferase imaging");
+			mmc.sleep(30000);
+			}
+			if(userPause == true){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(flexDelay);
+			}
+	mmc.sleep(2000); //Pause before luciferase exposure (currently 2 sec)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(j).channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mm.scripter().message("Image " + x + " complete");
+	mmc.sleep(2000); //Pause after exposures (currently 2sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+	print("j = " + j);
+	global.m = j + 1;
+	if (m == colourBloop){
+		global.colourAloop = colourBloop + nrFramesAi;}
+   		}
+if (countLoop < repeatLoopi){
+	global.globalCount = m;}
+	}//End daily loop
+//Entering into constant light loop
+	if (repeatLoopi == 0){
+		global.m = globalCount;}
+	for (m=m; m < nrFrames; m++) {
+		m = (int) m;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = m+1;
+		mm.scripter().message("Loop " + y + " of " + nrFrames + " at:" + "\n" + loopTime + " - Constant light");
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+      	mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsC); 
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsC);
+		mm.scripter().message(usedColourC + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); // Turn off LEDs
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+		if(userPause == true){
+			mm.scripter().message("Pausing before imaging");
+			mmc.sleep(userDelayMs);
+			}
+
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO");
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+
+if (userLUC == true){
+	mmc.setProperty("FW", "State", "4");//Moves to 560nm
+	mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+	mmc.setExposure(420000);//Set exposure for luciferase (7min)
+	mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+	mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn on reduce hgh pixels
+			if(userPause == false){
+			mm.scripter().message("Pausing before luciferase imaging");
+			mmc.sleep(30000);
+			}
+			if(userPause == true){
+			mm.scripter().message("Pausing before LUC imaging");
+			mmc.sleep(flexDelay);
+			}
+	mmc.sleep(2000); //Pause before luciferase exposure (currently 2 sec)
+	mm.scripter().message("Luciferase imaging in progress");
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(m).channel(3);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	}
+	mm.scripter().message("Image " + y + " complete");
+	mmc.sleep(2000); //Pause after exposures (currently 2sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+   }//End Constant condition loop
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+saveLocation += file2;
+store.freeze();
+mm.scripter().message("Images saved");
+
+//Hardware reset
+mmc.sleep(5000);
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Set LEDs to off. Redundant, but safe
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); 
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+mm.scripter().message("LEDs off after imaging");
+mmc.setProperty("FW", "State", "0");//Move filter into 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.setExposure(20); // Resets camera exposure (in ms)
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+public void refreshGUI();
+
+}//END LD-LL
+
+//LL with GFP 
+if (userExpt == "GFP LL"){
+gd = new ij.gui.GenericDialog("Constant Conditions Setup");
+gd.addNumericField("Red LED intensity : ", 0, 0);
+gd.addNumericField("Blue LED intensity : ", 0, 0);
+gd.addNumericField("Number of Minutes : ", 10, 0);
+gd.addNumericField("Number of Minutes (light) : ", 10, 0);
+gd.addNumericField("Images per minute", 2, 0);
+gd.addCheckbox("Advanced_Settings",false);
+gd.showDialog();
+if (gd.wasCanceled())
+	return;
+global.RedVolts = gd.getNextNumber();
+global.BlueVolts = gd.getNextNumber();
+global.userTl = gd.getNextNumber();
+global.userBl = gd.getNextNumber();
+global.userF = gd.getNextNumber();
+userSettings = gd.getNextBoolean();//Read check box
+global.usedExpose = 5000;
+global.usedDelay = 10000;
+
+//If numbers are too high, cancel
+if (RedVolts > 100){
+gui.showMessage("Red lights are set too high- please change");//Logic gate for exposure
+return;}
+if (BlueVolts > 100){
+gui.showMessage("Blue lights are set too high- please change");//Logic gate for exposure
+return;}
+
+//Record lights used
+usedColour = new String("\n" + "Red: "+ RedVolts + "\n" + "Blue: " + BlueVolts);
+testColour = new String("\n" + "Red: "+ RedVolts + "\n" + "Blue: " + BlueVolts);
+
+//Record expt ID
+global.usedLUMO = new String("LUMOB-" + userLUMO);
+
+//Colour picker
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+
+if (userSettings == true){
+	ge = new ij.gui.GenericDialog("Advanced Options");
+	ge.addNumericField("Delay before imaging", 5, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.addNumericField("Exposure Time", 30, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.showDialog();
+if (ge.wasCanceled())
+	return;
+global.userDelay = ge.getNextNumber();
+global.delayUserUnits = ge.getNextChoice();
+global.userExpose = ge.getNextNumber();
+global.expUserUnits = ge.getNextChoice();
+
+//Custom exposure and delays
+
+if (delayUserUnits == "min"){
+	global.delayUnits = 60000;}
+else {delayUnits = 1000;}
+if (expUserUnits == "min"){
+	global.expUnits = 60000;}
+else {expUnits = 1000;}
+global.usedDelay = userDelay * delayUnits;
+global.usedExpose = userExpose * expUnits;
+if (usedDelay <= 99){
+	mm.scripter().message("Delay must be greater than 100 ms!");
+	return;}
+if (usedExpose <= 0){
+	mm.scripter().message("Exposure must be greater than 0!");
+return;}
+}
+
+
+if (delayMin > 0){
+	mm.scripter().message("Imaging delayed by "+delayMin+" min");
+}
+mmc.sleep(delay);
+
+//Starting timestamp
+mm.scripter().clearMessageWindow();
+String startText = new String("Expt started at: ");
+Calendar cal = Calendar.getInstance();
+startText += cal.getTime();
+print(startText);
+
+usedExpt = new String("GFP");
+global.ExptTime = userTl * userF; 
+global.nrFrames = ExptTime;
+global.BlFrames = userBl * userF;
+
+//Time conversion
+global.TimeA = 60000 / userF; //Image every 60 sec (below- subtracting imaging time) !! 
+global.TimeB = 60000 / userF;
+if (userPause == true){
+	if (userLUC == true){
+global.TimeAm = TimeA - 334000 - 6000 - 3* userExpMs;//10min + roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 334000 - 6000 - 3* userExpMs;//10min + roGFP second image capture- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 6000 - 3* userExpMs - userDelayMs;//+ roGFP second image capture- no zeros off here
+global.TimeBm = TimeB - 6000 - 3* userExpMs - userDelayMs;//+ roGFP second image capture
+}
+}
+if (userPause == false){
+	if (userLUC == true){
+global.TimeAm = TimeA - 334000 - 6000 - 3* userExpMs;//10min + roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 334000 - 6000 - 3* userExpMs;//10min + roGFP image capture- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 6000 - 3* userExpMs;//+ roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 6000 - 3 * userExpMs;//+ roGFP image capture
+}
+}
+
+mm.scripter().message("Configuration complete: Lights set to " + usedColour + "\n" + "Expt type : " + usedExpt + "\n" + "Flipper is " + usedFlipper); //Config confirmation
+
+//Begin acquisition
+mm.scripter().message("Taking " + (int) ExptTime + " frames in total");
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("LUMO", "Gain", "2");//High sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Reduce hgh pixels
+//mmc.setProperty("MaestroServo", "Position", flipper);//Moves flipper down if activated in config
+//if (flipper==1895) {
+//	mmc.deviceBusy("MaestroServo"); //Safety call to wait for exposure to finish;}
+public void refreshGUI();
+
+nrFramesZ = (int) nrFrames;
+BlFramesZ = (int) BlFrames;
+BlDone = BlFrames+1;
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+//Sort out metadata
+sb = store.getSummaryMetadata().copyBuilder();
+axisOrder = new ArrayList();
+axisOrder.add(Coords.C);
+axisOrder.add(Coords.T);
+sb.axisOrder(axisOrder);
+channelNames = new ArrayList();
+channelNames.add("400nm");
+channelNames.add("460nm");
+channelNames.add("Autofluo");
+if (userLUC == true){channelNames.add("Luciferase");}
+sb.channelNames(channelNames);
+coordsB = store.getSummaryMetadata().getIntendedDimensions().copyBuilder();
+coordsB.c(nrChannels).t(nrFramesZ);//put in number of frames here, channels can be changed too
+sb.intendedDimensions(coordsB.build());
+store.setSummaryMetadata(sb.build());
+
+mm.displays().createDisplay(store);
+
+mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Reduce hgh pixels
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+	mm.scripter().message("Image " + y + " complete");
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+	mm.scripter().message("Waiting to enter loop");
+	mmc.sleep(1000); //wait before entering loop
+
+	for (m=1; m < BlFrames+1; m++) {
+		m = (int) m;
+		print(startText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = m+1;
+        mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVolts); 
+	    mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVolts); 
+	    mm.scripter().message("LEDs on");
+		mm.scripter().message("Loop " + y + " of " + BlFrames + " at:" + "\n" + loopTime + " - Constant light");
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+		mm.scripter().message(usedColour + " LEDs on for " + userTime + " hrs");
+		mmc.sleep(TimeAm);
+
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+	mm.scripter().message("Image " + y + " complete");
+	mmc.sleep(1000); //Pause after exposures (currently 1sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+
+   		}//End Blue light loop
+   	
+ mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+ mmc.setProperty("Arduino32-DAC/Red", "Volts", "0");
+   	
+   	for (n = BlDone; n < nrFrames+1; n++) {
+		n = (int) n;
+		print(startText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = n+1;
+		mm.scripter().message("Loop " + y + " of " + BlFrames + " at:" + "\n" + loopTime + " - Constant light");
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+		mm.scripter().message(usedColour + " LEDs on for " + userTime + " hrs");
+		mmc.sleep(TimeAm);
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(n).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(n).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 2sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(n).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+        mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+	mm.scripter().message("Image " + y + " complete");
+	mmc.sleep(1000); //Pause after exposures (currently 1sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); // Set growth LEDs back on
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+		mm.scripter().message("LEDs off");	
+   		}//End constant loop
+   		
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+saveLocation += file2;
+store.freeze();
+mm.scripter().message("Images saved");
+
+//Hardware reset
+mmc.sleep(5000);
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn all lights off, redundant but safe
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0");
+mm.scripter().message("LEDs off after imaging");
+mmc.setProperty("FW", "State", "0");//Move filter into 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.setExposure(20); // Resets camera exposure (in ms)
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+public void refreshGUI();
+
+}//End GFP LL
+
+//LL sub 30 s pulse with GFP 
+if (userExpt == "GFP LL sub 30 pulse"){
+gd = new ij.gui.GenericDialog("Constant Conditions Setup");
+gd.addNumericField("Red LED intensity : ", 40, 0);
+gd.addNumericField("Blue LED intensity : ", 26, 0);
+gd.addNumericField("Time  pulse < 30 s : ", 0, 0);
+gd.addNumericField("Number of Minutes : ", 15, 0);
+gd.addNumericField("Images per minute", 1, 0);
+gd.addChoice("Flipper active? ", flip, flip[0]);
+gd.addCheckbox("Advanced_Settings",false);
+gd.showDialog();
+if (gd.wasCanceled())
+	return;
+global.RedVolts = gd.getNextNumber();
+global.BlueVolts = gd.getNextNumber();
+global.userTP = gd.getNextNumber();
+global.userTl = gd.getNextNumber();
+global.userF = gd.getNextNumber();
+global.userFlipper = gd.getNextChoice();
+userSettings = gd.getNextBoolean();//Read check box
+global.usedExpose = 5000;
+global.usedDelay = 10000;
+
+//If numbers are too high, cancel
+if (RedVolts > 100){
+gui.showMessage("Red lights are set too high- please change");//Logic gate for exposure
+return;}
+if (BlueVolts > 100){
+gui.showMessage("Blue lights are set too high- please change");//Logic gate for exposure
+return;}
+
+//Record lights used
+usedColour = new String("\n" + "Red: "+ RedVolts + "\n" + "Blue: " + BlueVolts);
+testColour = new String("\n" + "Red: "+ RedVolts + "\n" + "Blue: " + BlueVolts);
+
+//Record expt ID
+global.usedLUMO = new String("LUMOB-" + userLUMO);
+
+//New Flipper picker
+//if (userFlipper == "Yes"){
+	//flipper = 1895;
+	//usedFlipper = new String("active");}
+//if (userFlipper =="No") {
+	//flipper = 1100;
+	//usedFlipper = new String("off");}
+
+//Colour picker
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+
+if (userSettings == true){
+	ge = new ij.gui.GenericDialog("Advanced Options");
+	ge.addNumericField("Delay before imaging", 5, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.addNumericField("Exposure Time", 20, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.showDialog();
+if (ge.wasCanceled())
+	return;
+global.userDelay = ge.getNextNumber();
+global.delayUserUnits = ge.getNextChoice();
+global.userExpose = ge.getNextNumber();
+global.expUserUnits = ge.getNextChoice();
+
+//Custom exposure and delays
+
+if (delayUserUnits == "min"){
+	global.delayUnits = 60000;}
+else {delayUnits = 1000;}
+if (expUserUnits == "min"){
+	global.expUnits = 60000;}
+else {expUnits = 1000;}
+global.usedDelay = userDelay * delayUnits;
+global.usedExpose = userExpose * expUnits;
+if (usedDelay <= 99){
+	mm.scripter().message("Delay must be greater than 100 ms!");
+	return;}
+if (usedExpose <= 0){
+	mm.scripter().message("Exposure must be greater than 0!");
+return;}
+}
+
+
+if (delayMin > 0){
+	mm.scripter().message("Imaging delayed by "+delayMin+" min");
+}
+mmc.sleep(delay);
+
+//Starting timestamp
+mm.scripter().clearMessageWindow();
+String startText = new String("Expt started at: ");
+Calendar cal = Calendar.getInstance();
+startText += cal.getTime();
+print(startText);
+
+usedExpt = new String("GFP");
+global.ExptTime = userTl * userF; //for GFP image every minute (add *2 for 30s)
+global.nrFrames = ExptTime;
+
+//Time conversion
+global.TimeA = 60000 / userF; //Image every 60 sec (below- subtracting imaging time) !! Change to match 1014
+global.TimeB = 60000 / userF;
+if (userPause == true){
+	if (userLUC == true){
+global.TimeAm = TimeA - 334000 - 6000 - 3* userExpMs;//20min + roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 334000 - 6000 - 3* userExpMs;//20min + roGFP second image capture- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 6000 - 3* userExpMs - userDelayMs;//+ roGFP second image capture- no zeros off here
+global.TimeBm = TimeB - 6000 - 3* userExpMs - userDelayMs;//+ roGFP second image capture
+}
+}
+if (userPause == false){
+	if (userLUC == true){
+global.TimeAm = TimeA - 334000 - 6000 - 3* userExpMs;//20min + roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 334000 - 6000 - 3* userExpMs;//20min + roGFP image capture- no zeros off here
+}
+if (userLUC == false){
+global.TimeAm = TimeA - 6000 - 3* userExpMs;//+ roGFP image capture- no zeros off here
+global.TimeBm = TimeB - 6000 - 3 * userExpMs;//+ roGFP image capture
+}
+}
+
+mm.scripter().message("Configuration complete: Lights set to " + usedColour + "\n" + "Expt type : " + usedExpt + "\n" + "Flipper is " + usedFlipper); //Config confirmation
+
+//Begin acquisition
+mm.scripter().message("ZT at start: " + (int) userZt + "\n" + "Taking " + (int) ExptTime + " frames in total");
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("LUMO", "Gain", "2");//High sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Reduce hgh pixels
+//mmc.setProperty("MaestroServo", "Position", flipper);//Moves flipper down if activated in config
+//if (flipper==1895) {
+//	mmc.deviceBusy("MaestroServo"); //Safety call to wait for exposure to finish;}
+public void refreshGUI();
+
+nrFramesZ = (int) nrFrames;
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+//Sort out metadata
+sb = store.getSummaryMetadata().copyBuilder();
+axisOrder = new ArrayList();
+axisOrder.add(Coords.C);
+axisOrder.add(Coords.T);
+sb.axisOrder(axisOrder);
+channelNames = new ArrayList();
+channelNames.add("400nm");
+channelNames.add("460nm");
+channelNames.add("Autofluo");
+if (userLUC == true){channelNames.add("Luciferase");}
+sb.channelNames(channelNames);
+coordsB = store.getSummaryMetadata().getIntendedDimensions().copyBuilder();
+coordsB.c(nrChannels).t(nrFramesZ);//put in number of frames here, channels can be changed too
+sb.intendedDimensions(coordsB.build());
+store.setSummaryMetadata(sb.build());
+
+mm.displays().createDisplay(store);
+
+mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Reduce hgh pixels
+		mmc.deviceBusy("LUMO"); 
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(0).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+	mm.scripter().message("Image " + y + " complete");
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+
+	mmc.sleep(2000);
+	mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); 
+	mmc.setProperty("Arduino32-DAC/Blue", "Volts", "100"); 
+	mm.scripter().message("LEDs on, waiting to enter loop");
+	global.TPs= TP * 1000
+	mmc.sleep(TPs); 
+	mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); 
+	mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+	
+
+	for (m=1; m < nrFrames+1; m++) {
+		m = (int) m;
+		print(startText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = m+1;
+		mm.scripter().message("Loop " + y + " of " + nrFrames + " at:" + "\n" + loopTime + " - Constant light");
+		mmc.setProperty("FW", "State", "0");//Move FW to 515nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+		mmc.setExposure(userExpMs);
+		mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+		mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Reduce hgh pixels
+		mm.scripter().message(usedColour + " LEDs on for " + userTime + " hrs");
+		if (m > 1){
+		mmc.sleep(TimeAm);}
+		else {mmc.sleep(20000);}
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		//mmc.setProperty("MaestroServo", "Position", 1895);//Moves flipper down
+		
+		mm.scripter().message("Exposure in progress");
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "100");
+		//mmc.setExposure(10);
+		mmc.sleep(1000); //Pause before exposure (currently 1sec)
+
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mm.scripter().message("460nm image acquired");
+
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0");
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "100");
+		mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(1);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("400nm image acquired");
+
+        mmc.setProperty("FW", "State", "3");//Move FW to 460nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+        mmc.sleep(1000); //Pause before exposure (currently 1 sec)
+        image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(2);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Autofluorescence image acquired");
+
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+		mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+
+	mm.scripter().message("Image " + y + " complete");
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+	mmc.sleep(1000); //Pause after exposures (currently 1 sec)
+		//Acquisition loop ends
+	
+   		}//End constant loop
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+saveLocation += file2;
+store.freeze();
+mm.scripter().message("Images saved");
+
+//Hardware reset
+mmc.sleep(5000);
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn all lights off, redundant but safe
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0");
+mm.scripter().message("LEDs off after imaging");
+mmc.setProperty("FW", "State", "0");//Move filter into 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.setExposure(20); // Resets camera exposure (in ms)
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+public void refreshGUI();
+
+}//End GFP LL pulse
+}
+
+
+//Luciferase only
+if (userMode == "LUC LD-LL"){
+//Set parameters for Luciferase only
+gg = new ij.gui.GenericDialog("LUC LD-LL");
+gd.addNumericField("Daylight Red LED intensity : ", 0, 0);
+gd.addNumericField("Daylight Blue LED intensity : ", 0, 0);
+gg.addNumericField("Imaging interval during days (h): ", 2, 0);
+gg.addNumericField("Number of images (Day) : ", 6, 0);
+gd.addNumericField("Night Red LED intensity : ", 0, 0);
+gd.addNumericField("Night Blue LED intensity : ", 0, 0);
+gg.addNumericField("Imaging interval at night (h): ", 2, 0);
+gg.addNumericField("Number of images (Night) : ", 6, 0);
+gg.addNumericField("Number of days in LD cycles: ", 1, 0);
+gd.addNumericField("Constant conditions Red LED intensity : ", 0, 0);
+gd.addNumericField("Constant conditions Blue LED intensity : ", 0, 0);
+gg.addNumericField("Number of hours in constant light: ", 120, 0);
+gg.addNumericField("Closest previous 'even' ZT (h): ", 0, 0);
+gg.addNumericField("Pause before first imaging loop (min): ", 0, 0);
+gg.addChoice("Flipper active? ", flip, flip[0]);//flipper inactive
+gg.showDialog();
+if (gg.wasCanceled())
+	return;
+global.userTrial = userLUMO;
+global.RedVoltsA = gd.getNextNumber(); // Colour A
+global.BlueVoltsA = gd.getNextNumber();
+global.userTimeA = gg.getNextNumber(); //Time with Colour1 on
+global.nrFramesA = gg.getNextNumber(); 
+global.RedVoltsB = gd.getNextNumber(); // Colour B
+global.BlueVoltsB = gd.getNextNumber();
+global.userTimeB = gg.getNextNumber(); //Time with Colour2 on
+global.nrFramesB = gg.getNextNumber(); 
+global.repeatLoop = gg.getNextNumber();
+global.repeatLoop = repeatLoop - 1;
+global.RedVoltsC = gd.getNextNumber();
+global.BlueVoltsC = gd.getNextNumber();
+global.nrFramesC = gg.getNextNumber();//Number of images in constant light
+global.userZt = gg.getNextNumber();
+global.pauseA = gg.getNextNumber();
+global.userFlipper = gg.getNextChoice();
+
+//Record Expt ID
+usedLUMO = new String("LUMOB-" + userTrial);
+
+//convert to integers
+global.nrFramesAi = nrFramesA;
+global.nrFramesBi = nrFramesB;
+global.nrFramesCi = (nrFramesC / userTimeA);
+global.repeatLoopi = repeatLoop;
+global.pauseAi = pauseA;
+global.pauseAims = pauseAi * 60000;
+
+global.dayCal = nrFramesAi * userTimeA;
+global.nightCal = nrFramesBi * userTimeB;
+global.loopCal = repeatLoop + 1;
+String dayCalu = new String ();
+String nightCalu = new String ();
+String loopCalu = new String ();
+String pauseCalu = new String ();
+dayCalu += dayCal;
+nightCalu += nightCal;
+loopCalu += loopCal;
+pauseCal = (int) pauseA;
+pauseCalu += pauseCal;
+
+//If numbers are too high, cancel
+if (RedVoltsA > 100){
+gui.showMessage("Red lights are set too high in day- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsA > 100){
+gui.showMessage("Blue lights are set too high in day- please change");//Logic gate for exposure
+return;}
+
+if (RedVoltsB > 100){
+gui.showMessage("Red lights are set too high in day- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsB > 100){
+gui.showMessage("Blue lights are set too high in day- please change");//Logic gate for exposure
+return;}
+
+if (RedVoltsC > 100){
+gui.showMessage("Red lights are set too high in day- please change");//Logic gate for exposure
+return;}
+if (BlueVoltsC > 100){
+gui.showMessage("Blue lights are set too high in day- please change");//Logic gate for exposure
+return;}
+
+//Confirmation text
+gh = new ij.gui.GenericDialog("LD-LL Cycles");
+gh.addStringField("Day length (Hrs, Confirmation only): ", dayCalu, 4);
+gh.addStringField("Night length (Hrs, Confirmation only): ", nightCalu, 4);
+gh.addStringField("# of days (Confirmation only): ", loopCalu, 4);
+gh.addStringField("First imaging loop in (Mins, Confirmation only): ", pauseCalu, 4);
+gh.showDialog();
+if (gh.wasCanceled())
+	return;
+
+//Time conversion
+global.TimeA = userTimeA * 3600000;
+global.TimeB= userTimeB * 3600000;
+
+global.TimeAm = TimeA - 723000;//30min 2 second image capture- no zeros off here
+global.TimeBm = TimeB - 723000;//30min 2 second image capture- no zeros off here
+
+//First Day
+global.firstDiel = nrFramesAi - (userZt / userTimeA);
+if (pauseCal == 0){
+	global.firstDiel = (int) firstDiel;}
+else {global.firstDiel = firstDiel - 1;}
+	global.firstNight = nrFramesBi;
+	global.firstDay = firstDiel + firstNight;
+	print("First diurnal: " + firstDiel + " images");
+	print("First night: " + firstNight + " images");
+	print("First day: " + firstDay + " images");
+
+logicDiel = dayCal - userZt;//Logic gate for day length
+if (logicDiel <= 1){
+	mm.scripter().message("Cannot start after ZT11");
+	return;}
+
+//Flipper picker- LD-LL loop
+if (userFlipper == "Yes"){
+	flipper = 1830;
+	usedFlipper = new String("active");}
+if (userFlipper == "No") {
+	flipper = 1100;
+	usedFlipper = new String("off");}
+
+//Starting timestamp
+public void refreshGUI();
+mm.scripter().clearMessageWindow();
+String startText = new String("Expt started at: ");
+Calendar cal = Calendar.getInstance();
+startText += cal.getTime();
+print(startText);
+
+//Start imaging
+
+//Redefine parameters
+global.nrFrames = ((firstDay + ((nrFramesAi + nrFramesBi) * repeatLoopi)) + nrFramesCi); //Number of images
+global.globalCount = firstDay;
+global.colourAloop = nrFramesAi + globalCount;
+global.colourBloop = colourAloop + nrFramesBi;
+
+//Colour picker
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+public void refreshGUI();
+repeatLoopText = repeatLoop + 1;
+String diffText = new String("Configuration complete: Lights set to " + usedColourA + " for " + (int) userTimeA + " hrs x " + nrFramesAi + " then " + usedColourB + " for " + (int) userTimeB + " hrs x " + nrFramesBi + " for " + (int) repeatLoopText + " days, then " + (int) nrFramesC + " hours in " + usedColourC + "\n" + "Expt type : LUC" + "\n"); //Config confirmation
+print(diffText);
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+mm.displays().createDisplay(store);
+
+//Image acquisition loop
+mm.scripter().message("Waiting to begin program");
+mmc.sleep(2000); //wait before entering loop
+if (userFlipper == "Yes"){
+	mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+mmc.sleep(2000); //wait before turning on lights
+mm.scripter().message(usedColourA + " LEDs on");
+mm.scripter().message("Pausing for " + pauseAi + " mins before entering imaging loop");
+mmc.sleep(pauseAims);
+	
+//First day imaging
+	for (k=0; k < firstDiel; k++) {
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = k+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime);
+      mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+      mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn off reduce hgh pixels
+      mmc.setExposure(300000);//Set exposure for luciferase (15min)
+      if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+      mmc.setProperty("FW", "State", "4");//Move FW to 685nm
+		mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsA); //Set red growth LEDs on
+	  mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsA); 
+		mm.scripter().message(usedColourA + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		//Acquisition loop
+		mmc.setShutterOpen(false); //Turn off LEDs
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs on
+	  	mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); 
+		mm.scripter().message("Growth LEDs off");
+		mm.scripter().message("Pausing before imaging");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1100);}//Moves flipper up
+		mmc.sleep(30000); //Wait 2 min
+		mm.scripter().message("Luciferase imaging in progress");
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(k).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Image " + x + " complete");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.sleep(2000); //Pause after exposures (currently 2sec)
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+		global.l = k + 1;
+   		}
+	for (l=l; l < firstDay; l++) {
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = l+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime);
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mmc.sleep(1000);
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsB); //Set growth LEDs on
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsB);
+		mm.scripter().message(usedColourB + " LEDs on for " + userTimeB + " hrs");
+		mmc.sleep(TimeBm);
+
+//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mm.scripter().message("Growth LEDs off");
+		mm.scripter().message("Pausing before imaging");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1100);}//Moves flipper up
+		mmc.sleep(30000);
+		mm.scripter().message("Luciferase imaging in progress");
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(l).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Image " + x + " complete");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.sleep(2000); //Pause after exposures (currently 2sec)
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+   		}
+//Entering into Diurnal loop
+	for (countLoop=0; countLoop < repeatLoopi; countLoop++) {
+
+	for (i=globalCount; i < colourAloop; i++) {
+		i = (int) i;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = i+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime + " - Daytime");
+      if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mmc.sleep(1000);
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsA); //Set growth LEDs on
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsA);
+		mm.scripter().message(usedColourA + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		
+//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mm.scripter().message("Growth LEDs off");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1110);}//Moves flipper up
+		mm.scripter().message("Pausing before imaging");
+		mmc.sleep(30000); //Wait 2 min
+		mm.scripter().message("Luciferase imaging in progress");
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(i).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Image " + x + " complete");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.sleep(2000); //Pause after exposures (currently 2sec)
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		global.j = i + 1;
+		if (j ==colourAloop){ 
+		global.colourBloop = colourAloop + nrFramesBi;}
+		//Acquisition loop ends
+   		}
+	for (j=j; j < colourBloop; j++) {
+		j = (int) j;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		x = j+1;
+		mm.scripter().message("Loop " + x + " of " + nrFrames + " at:" + "\n" + loopTime + " - Night time");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+	  mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+	  	mmc.sleep(1000);
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsB); //Set growth LEDs on
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsB);
+		mm.scripter().message(usedColourB + " LEDs on for " + userTimeB + " hrs");
+		mmc.sleep(TimeBm);
+		
+//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+	 	mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mm.scripter().message("Growth LEDs off");
+		mm.scripter().message("Pausing before imaging");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1100);}//Moves flipper up
+		mmc.sleep(30000);
+		mm.scripter().message("Luciferase imaging in progress");
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(j).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Image " + x + " complete");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.sleep(2000); //Pause after exposures (currently 2sec)
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+	print("j = " + j);
+	global.m = j + 1;
+	if (m == colourBloop){
+		global.colourAloop = colourBloop + nrFramesAi;}
+   		}
+if (countLoop < repeatLoopi){
+	global.globalCount = m;}
+	}//End daily loop
+//Entering into constant light loop
+	if (repeatLoopi == 0){
+		global.m = globalCount;}
+	for (m=m; m < nrFrames; m++) {
+		m = (int) m;
+		print(startText);
+		print(diffText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = m+1;
+		mm.scripter().message("Loop " + y + " of " + nrFrames + " at:" + "\n" + loopTime + " - Constant light");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+	  mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+	  	mmc.sleep(1000);
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVoltsC); //Set growth LEDs on
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVoltsC);
+		mm.scripter().message(usedColourC + " LEDs on for " + userTimeA + " hrs");
+		mmc.sleep(TimeAm);
+		
+//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set growth LEDs off
+	  	mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+		mm.scripter().message("Growth LEDs off");
+		mm.scripter().message("Pausing before imaging");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1100);}//Moves flipper up
+		mmc.sleep(30000);
+		mm.scripter().message("Luciferase imaging in progress");
+		image = mm.live().snap(false).get(0);
+		Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+		builder = builder.time(m).channel(0);
+		image = image.copyAtCoords(builder.build());
+		store.putImage(image);
+		mm.scripter().message("Image " + y + " complete");
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+		mmc.sleep(2000); //Pause after exposures (currently 2sec)
+		mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+		//Acquisition loop ends
+	}
+
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+store.freeze();
+mm.scripter().message("Imaging complete");
+	
+   }//End Constant condition loop
+//Contant light, luciferase
+if (userMode == "LUC LL"){
+gd = new ij.gui.GenericDialog("Constant Conditions Setup");
+gd.addNumericField("Red LED intensity : ", 0, 0);
+gd.addNumericField("Blue LED intensity : ", 0, 0);
+gd.addNumericField("Current Time (ZT) : ", 0, 0);
+gd.addNumericField("Number of Days : ", 5, 0);
+gd.addChoice("Flipper active? ", flip, flip[0]);
+gd.addCheckbox("Advanced_Settings",false);
+gd.showDialog();
+if (gd.wasCanceled())
+	return;
+global.RedVolts = gd.getNextNumber();
+global.BlueVolts = gd.getNextNumber();
+global.userZt = gd.getNextNumber();
+global.userTl = gd.getNextNumber();
+global.userFlipper = gd.getNextChoice();
+userSettings = gd.getNextBoolean();//Read check box
+global.usedExpose = 300000;
+global.usedDelay = 30000;
+
+//Record expt ID
+global.usedLUMO = new String("LUMOB-" + userLUMO);
+
+//Colour picker
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set LEDs to off
+
+if (userSettings == true){
+	ge = new ij.gui.GenericDialog("Advanced Options");
+	ge.addNumericField("Delay before imaging", 5, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.addNumericField("Exposure Time", 20, 0);
+	ge.addChoice("Units", units, units[0]);
+	ge.showDialog();
+if (ge.wasCanceled())
+	return;
+global.userDelay = ge.getNextNumber();
+global.delayUserUnits = ge.getNextChoice();
+global.userExpose = ge.getNextNumber();
+global.expUserUnits = ge.getNextChoice();
+
+//Custom exposure and delays
+
+if (delayUserUnits == "min"){
+	global.delayUnits = 60000;}
+else {delayUnits = 1000;}
+if (expUserUnits == "min"){
+	global.expUnits = 60000;}
+else {expUnits = 1000;}
+global.usedDelay = userDelay * delayUnits;
+global.usedExpose = userExpose * expUnits;
+if (usedDelay <= 99){
+	mm.scripter().message("Delay must be greater than 100 ms!");
+	return;}
+if (usedExpose <= 0){
+	mm.scripter().message("Exposure must be greater than 0!");
+return;}
+}
+
+//Starting timestamp
+mm.scripter().clearMessageWindow();
+String startText = new String("Expt started at: ");
+Calendar cal = Calendar.getInstance();
+startText += cal.getTime();
+print(startText);
+
+usedExpt = new String("LUC");
+global.ExptTime = userTl * 12 - userZt * 0.5; //for luciferase every 2 hours
+global.nrFrames = ExptTime;
+
+//Time conversion
+global.TimeA = 3600000 - 335000;//Hard-wired one hour imaging here, taking pauses and exposure time off
+
+mm.scripter().message("Configuration complete: Lights set to " + usedColour + "\n" + "Expt type : " + usedExpt + "\n" + "Flipper is " + usedFlipper); //Config confirmation
+
+//Begin acquisition
+mm.scripter().message("ZT at start: " + (int) userZt + "\n" + "Taking " + (int) ExptTime + " frames in total");
+if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+
+mmc.setProperty("LUMO", "Gain", "3");//High sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "Yes");//Turn off reduce hgh pixels
+mmc.setExposure(300000);//Set exposure for luciferase (5min)
+mmc.setProperty("FW", "State", "4");//Move FW to 560nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0"); //Turn off imaging LEDs
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn off imaging LEDs
+
+public void refreshGUI();
+mm.scripter().message("LEDs on, waiting to enter loop");
+mmc.sleep(5000); //wait before entering loop
+nrFramesZ = (int) nrFrames;
+
+//Setup save file
+saveLocation += userFile;
+Datastore store = mm.data().createRAMDatastore();
+
+mm.displays().createDisplay(store);
+
+	for (m=0; m < nrFrames; m++) {
+		m = (int) m;
+		print(startText);
+		Calendar cal = Calendar.getInstance();
+		loopTime = cal.getTime();
+		y = m+1;
+		mm.scripter().message("Loop " + y + " of " + nrFrames + " at:" + "\n" + loopTime + " - Constant light");
+      mmc.setProperty("Arduino32-DAC/Red", "Volts", RedVolts); //Set red growth LEDs to off
+	  mmc.setProperty("Arduino32-DAC/Blue", "Volts", BlueVolts); //Set blue growth LEDs to off
+		mm.scripter().message(usedColour + " LEDs on for " + userTime + " hrs");
+		mmc.sleep(TimeA);
+
+		
+		//Acquisition loop
+		mmc.setProperty("Arduino32-DAC/Red", "Volts", "0"); //Set red growth LEDs to off
+		mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0"); //Set blue growth LEDs to off
+		mm.scripter().message("Growth LEDs off");
+		mmc.sleep(2000); //Pause before exposure (currently 5sec)
+		if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1100);}//Moves flipper up
+		mm.scripter().message("Pausing before luciferase imaging");
+		mmc.sleep(30000); //Wait 2 min
+		mm.scripter().message("Luciferase imaging in progress");
+
+
+	image = mm.live().snap(false).get(0);
+	Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+	builder = builder.time(m).channel(0);
+	image = image.copyAtCoords(builder.build());
+	store.putImage(image);
+	mm.scripter().message("Image " + y + " complete");
+	if (userFlipper == "Yes"){mmc.setProperty("MaestroServo", "Position", 1830);}//Moves flipper down
+	mmc.sleep(3000); //Pause after exposures (currently 2sec)
+	mmc.deviceBusy("LUMO"); //Safety call to wait for exposure to finish
+	}
+		//Acquisition loop ends
+//Save data
+store.save(Datastore.SaveMode.MULTIPAGE_TIFF, saveLocation);
+store.freeze();
+mm.scripter().message("Imaging complete");		
+   		}//End constant loop
+
+//Reset hardware
+mmc.sleep(5000);
+mmc.setProperty("Arduino32-DAC/460nm", "Volts", "0"); //Turn all lights off, redundant but safe
+mmc.setProperty("Arduino32-DAC/400nm", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Blue", "Volts", "0");
+mmc.setProperty("Arduino32-DAC/Red", "Volts", "0");
+mm.scripter().message("LEDs off after imaging");
+mmc.setProperty("FW", "State", "0");//Move filter into 515nm
+mmc.deviceBusy("FW"); //Safety call to wait for filterwheel to move
+mmc.setExposure(20); // Resets camera exposure (in ms)
+mmc.setProperty("LUMO", "Gain", "2");//Mid sensitivity mode
+mmc.setProperty("LUMO", "PP  1   ENABLED", "No");//Turn off high pixel reduction
+public void refreshGUI();
+
+//log settings
+FileWriter fstream = new FileWriter("C:\\LUMOData\\log.txt", true);
+BufferedWriter out = new BufferedWriter(fstream);
+out.write(usedLUMO + "," + userFile + "," + usedColourA + "," + usedFlipper + "," + userZt);
+out.write(System.getProperty("line.separator"));
+out.close();
+fstream.close();
+mm.scripter().message("Program complete");
+return;
